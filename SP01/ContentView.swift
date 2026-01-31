@@ -5,6 +5,9 @@
 
 import CoreLocation
 import SwiftUI
+#if canImport(WidgetKit)
+import WidgetKit
+#endif
 
 struct ContentView: View {
     @StateObject private var locationManager = LocationManager()
@@ -23,7 +26,7 @@ struct ContentView: View {
                     ProgressView("Loading weather…")
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let error = errorMessage {
-                    VStack(spacing: 12) {
+                    VStack(spacing: 16) {
                         Image(systemName: "cloud.sun.rain")
                             .font(.largeTitle)
                             .foregroundStyle(.secondary)
@@ -35,6 +38,19 @@ struct ContentView: View {
                                 .font(.caption)
                                 .multilineTextAlignment(.center)
                                 .foregroundStyle(.secondary)
+                        } else {
+                            Text("Location may take a few seconds. Waiting for GPS…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("Try again") {
+                                errorMessage = nil
+                                locationManager.requestLocation()
+                                Task {
+                                    try? await Task.sleep(nanoseconds: 4_000_000_000)
+                                    await fetchWeatherIfPossible()
+                                }
+                            }
+                            .buttonStyle(.bordered)
                         }
                     }
                     .padding()
@@ -74,14 +90,20 @@ struct ContentView: View {
         .task {
             await notificationManager.requestPermission()
         }
+        .onChange(of: locationManager.lastLocation) { _, newLocation in
+            if newLocation != nil, hasRequestedLocation, weather == nil, !isLoading {
+                Task { await fetchWeatherIfPossible() }
+            }
+        }
     }
 
     private func requestLocationAndFetch() {
         hasRequestedLocation = true
+        errorMessage = nil
         locationManager.requestPermission()
         locationManager.requestLocation()
         Task {
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
             await fetchWeatherIfPossible()
         }
     }
@@ -100,6 +122,17 @@ struct ContentView: View {
         defer { isLoading = false }
         do {
             weather = try await weatherService.fetchWeather(latitude: coords.lat, longitude: coords.lon)
+            
+            // Analyze and save suggestions for widget
+            if let w = weather {
+                let suggestions = weatherService.analyzeDailySuggestions(from: w)
+                SharedDataManager.shared.saveDailySuggestions(suggestions)
+                
+                // Refresh widget timeline
+                #if canImport(WidgetKit)
+                WidgetCenter.shared.reloadAllTimelines()
+                #endif
+            }
         } catch let err as WeatherError {
             errorMessage = err.localizedDescription
         } catch {

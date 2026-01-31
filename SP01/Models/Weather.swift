@@ -16,12 +16,13 @@ enum WeatherError: LocalizedError {
     }
 }
 
-// Open-Meteo API response (current + daily for today)
+// Open-Meteo API response (current + hourly + daily)
 struct WeatherResponse: Codable {
     let latitude: Double
     let longitude: Double
     let timezone: String
     let current: CurrentWeather?
+    let hourly: HourlyWeather?
     let daily: DailyWeather?
 }
 
@@ -45,6 +46,22 @@ struct CurrentWeather: Codable {
     }
 }
 
+struct HourlyWeather: Codable {
+    let time: [String]
+    let temperature2m: [Double]
+    let precipitation: [Double]
+    let weatherCode: [Int]
+    let windSpeed10m: [Double]
+
+    enum CodingKeys: String, CodingKey {
+        case time
+        case temperature2m = "temperature_2m"
+        case precipitation
+        case weatherCode = "weather_code"
+        case windSpeed10m = "wind_speed_10m"
+    }
+}
+
 struct DailyWeather: Codable {
     let time: [String]
     let precipitationSum: [Double?]?
@@ -64,7 +81,7 @@ struct DailyWeather: Codable {
 }
 
 // Parsed weather for the UI
-struct WeatherInfo {
+struct WeatherInfo: Codable {
     let temperature: Double
     let humidity: Int?
     let precipitation: Double
@@ -74,6 +91,7 @@ struct WeatherInfo {
     let todayHigh: Double?
     let todayLow: Double?
     let todayRainChance: Int?
+    let hourlyForecast: [HourlyForecast]?
 
     /// Open-Meteo WMO weather codes: rain 61–67, 80–82; snow 71–77, 85–86; drizzle 51–57; thunder 95–99
     var isRainy: Bool {
@@ -102,4 +120,37 @@ struct WeatherInfo {
     var needsJacket: Bool { temperature < 15 }
     var needsSunscreen: Bool { temperature > 26 && weatherCode <= 3 }
     var isWindy: Bool { (windGusts ?? windSpeed) > 35 }
+}
+
+// Single hour in the forecast
+struct HourlyForecast: Codable {
+    let time: String
+    let temperature: Double
+    let precipitation: Double
+    let weatherCode: Int
+    let windSpeed: Double
+}
+
+// Analysis of next 12 hours for widget
+struct DailySuggestions: Codable {
+    let needsUmbrella: Bool
+    let needsJacket: Bool
+    let needsSunscreen: Bool
+    let needsWindbreaker: Bool
+    let needsWarmCoat: Bool
+    let minTemp: Double
+    let maxTemp: Double
+    let totalPrecipitation: Double
+    let lastUpdated: Date
+    
+    var items: [String] {
+        var result: [String] = []
+        if needsUmbrella { result.append("Umbrella") }
+        if needsJacket { result.append("Jacket") }
+        if needsSunscreen { result.append("Sunscreen") }
+        if needsWindbreaker { result.append("Windbreaker") }
+        if needsWarmCoat { result.append("Warm coat") }
+        if result.isEmpty { result.append("Looking good") }
+        return result
+    }
 }

@@ -16,7 +16,9 @@ final class WeatherService {
         components.queryItems = [
             URLQueryItem(name: "latitude", value: "\(latitude)"),
             URLQueryItem(name: "longitude", value: "\(longitude)"),
-            URLQueryItem(name: "current", value: "temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m")
+            URLQueryItem(name: "current", value: "temperature_2m,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_gusts_10m"),
+            URLQueryItem(name: "hourly", value: "temperature_2m,precipitation,weather_code,wind_speed_10m"),
+            URLQueryItem(name: "forecast_hours", value: "12")
         ]
         guard let url = components.url else { throw URLError(.badURL) }
 
@@ -52,6 +54,16 @@ final class WeatherService {
             todayRainChance = daily.precipitationProbabilityMax?.first.flatMap { $0 }
         }
 
+        // Parse hourly forecast (next 12 hours)
+        var hourlyForecast: [HourlyForecast]?
+        if let hourly = response.hourly, !hourly.time.isEmpty {
+            hourlyForecast = zip(hourly.time, zip(hourly.temperature2m, zip(hourly.precipitation, zip(hourly.weatherCode, hourly.windSpeed10m))))
+                .map { time, data in
+                    let (temp, (precip, (code, wind))) = data
+                    return HourlyForecast(time: time, temperature: temp, precipitation: precip, weatherCode: code, windSpeed: wind)
+                }
+        }
+
         return WeatherInfo(
             temperature: temp,
             humidity: cur?.relativeHumidity2m,
@@ -61,7 +73,60 @@ final class WeatherService {
             windGusts: gusts,
             todayHigh: todayHigh,
             todayLow: todayLow,
-            todayRainChance: todayRainChance
+            todayRainChance: todayRainChance,
+            hourlyForecast: hourlyForecast
+        )
+    }
+    
+    /// Analyze next 12 hours and determine what's needed for the day
+    func analyzeDailySuggestions(from weather: WeatherInfo) -> DailySuggestions {
+        guard let hourly = weather.hourlyForecast, !hourly.isEmpty else {
+            // Fallback to current weather if no hourly data
+            return DailySuggestions(
+                needsUmbrella: weather.needsUmbrella,
+                needsJacket: weather.needsJacket,
+                needsSunscreen: weather.needsSunscreen,
+                needsWindbreaker: weather.isWindy,
+                needsWarmCoat: weather.isSnowy,
+                minTemp: weather.temperature,
+                maxTemp: weather.temperature,
+                totalPrecipitation: weather.precipitation,
+                lastUpdated: Date()
+            )
+        }
+        
+        let temps = hourly.map { $0.temperature }
+        let minTemp = temps.min() ?? weather.temperature
+        let maxTemp = temps.max() ?? weather.temperature
+        let totalPrecip = hourly.reduce(0.0) { $0 + $1.precipitation }
+        
+        // Check if any hour has rain/snow
+        let hasRain = hourly.contains { code in
+            [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82].contains(code.weatherCode)
+        }
+        let hasSnow = hourly.contains { code in
+            [71, 73, 75, 77, 85, 86].contains(code.weatherCode)
+        }
+        
+        // Check if it's cold (below 15°C at any point)
+        let isCold = minTemp < 15
+        
+        // Check if it's hot and sunny (above 26°C and clear codes 0-3)
+        let isHotAndSunny = maxTemp > 26 && hourly.contains { $0.weatherCode <= 3 }
+        
+        // Check if windy (any hour > 35 km/h)
+        let isWindy = hourly.contains { $0.windSpeed > 35 }
+        
+        return DailySuggestions(
+            needsUmbrella: hasRain || totalPrecip > 0.5,
+            needsJacket: isCold,
+            needsSunscreen: isHotAndSunny,
+            needsWindbreaker: isWindy,
+            needsWarmCoat: hasSnow,
+            minTemp: minTemp,
+            maxTemp: maxTemp,
+            totalPrecipitation: totalPrecip,
+            lastUpdated: Date()
         )
     }
 }
